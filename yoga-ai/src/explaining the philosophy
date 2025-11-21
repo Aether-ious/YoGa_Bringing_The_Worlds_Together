@@ -1,0 +1,160 @@
+This is the "Under the Hood" look at how your custom AI works. You are building a **Time-Series Classification System**.
+
+Here is the breakdown of the two engines you just built.
+
+---
+
+### 1. `extract_data.py` (The Eyes)
+**Goal:** Convert "Human Video" (pixels) into "Machine Language" (numbers).
+
+Computers don't understand video. They understand math. This script acts as a translator.
+
+* **Step A: The Scanner (MediaPipe)**
+    It looks at every single frame of your video and finds **33 Keypoints** on the human body (Nose, Shoulders, Elbows, Hips, Knees, Ankles, etc.).
+    * For each point, it records: `x` (horizontal), `y` (vertical), `z` (depth), and `visibility` (how sure it is).
+    * Total math: `33 points * 4 values = 132 numbers` per frame.
+
+* **Step B: The Sequencer (Time)**
+    A single frame isn't enough to know if you are *holding* a pose or just moving through it.
+    * The script groups **30 frames together** into a single "bundle" (Sequence).
+    * This tells the AI: "Here is what the body did for the last 1 second."
+
+* **Step C: The Save**
+    It saves two massive files:
+    * `X.npy`: The motion data (thousands of sequences of 132 numbers).
+    * `y.npy`: The correct answers (Labels: 0 for Tree, 1 for Warrior, etc.).
+
+---
+
+### 2. `train_model.py` (The Brain)
+**Goal:** Teach a Neural Network to find patterns in those numbers.
+
+We are using a specific type of brain called an **LSTM (Long Short-Term Memory)**.
+
+* **Why LSTM?**
+    Standard neural networks (like CNNs) only look at *one* image at a time. LSTMs have "memory." They can remember what happened in Frame 1 to make sense of Frame 30. This is perfect for Yoga because it understands **stability** and **movement**.
+
+* **The Architecture:**
+    1.  **Input Layer:** Receives the stream of 132 numbers.
+    2.  **LSTM Layers:** These neurons "watch" the sequence flow. They learn patterns like *"The foot moved up and stayed there"* (Tree Pose).
+    3.  **Fully Connected Layer:** This is the Judge. It takes the final thought from the LSTM and converts it into probabilities (e.g., "90% Warrior, 10% Tree").
+
+* **The Training Loop:**
+    * **Forward Pass:** The model guesses the pose.
+    * **Loss Calculation:** It compares its guess to the real label (`y.npy`).
+    * **Backpropagation:** It punishes the neurons that guessed wrong and adjusts their "weights" to be smarter next time.
+
+---
+
+### 🤝 How They Connect
+
+1.  **Extraction** turns **Video** $\to$ **`X.npy`** (The Data).
+2.  **Training** turns **`X.npy`** $\to$ **`yoga_lstm.pth`** (The Brain).
+3.  **Inference (App)** uses the **Brain** to predict new videos in real-time.
+
+You effectively just built a system that translates **human movement** into **math**, and then math into **understanding**. 🧠
+
+
+##########################################################################################
+
+
+This is a deep dive into the **"Brain"** of your AI (the `src/train_model.py` script) and the mechanics of **Long Short-Term Memory (LSTM)**.
+
+### 1\. The Input: What does the AI actually "See"?
+
+Before the LSTM even starts, we must understand the data shape. It doesn't see a video; it sees a **spreadsheet of numbers**.
+
+In your `src/extract_data.py`, we flattened the skeletal data:
+
+  * **33 Keypoints:** Nose, Shoulders, Elbows, Knees, etc.
+  * **4 Values per point:** `x`, `y`, `z` (3D coordinates), and `visibility` (how clearly the camera sees it).
+  * **Total Features:** $33 \times 4 = 132$ numbers per frame.
+
+The LSTM receives a **Sequence** (a batch of frames). In your code, we set `SEQUENCE_LENGTH = 30`.
+So, one single input sample looks like a grid of size **(30, 132)**.
+
+-----
+
+### 2\. The LSTM (The "Time Machine")
+
+Standard Neural Networks (like CNNs) take a snapshot and forget it immediately. They have no concept of time.
+**LSTMs (Long Short-Term Memory)** are different. They process data sequentially, maintaining an internal "memory" that persists from Frame 1 to Frame 30.
+
+#### **The "Unrolling" Concept**
+
+Imagine the LSTM as a machine that reads the frames one by one.
+
+  * **Frame 1:** You are standing still. The LSTM saves this to its "Short Term Memory" (Hidden State).
+  * **Frame 15:** You lift your leg. The LSTM combines the new info (leg up) with the memory (was standing). It realizes: *"Movement detected."*
+  * **Frame 30:** You place your foot on your thigh. The LSTM combines this with the history. It concludes: *"This sequence matches Tree Pose."*
+
+#### **The Gates (How it thinks)**
+
+Inside the LSTM, there are three "Gates" that control this memory flow. They use math (Sigmoid functions) to decide what to keep or throw away.
+
+1.  **Forget Gate:** *"Is this info relevant anymore?"*
+      * *Example:* If you were scratching your nose in Frame 5, that movement is noise. The Forget Gate deletes it from memory so it doesn't confuse the final prediction.
+2.  **Input Gate:** *"Is this new info important?"*
+      * *Example:* In Frame 20, your knee bends to 90 degrees. This is critical for "Warrior II." The Input Gate highlights this and stores it in the "Cell State" (Long Term Memory).
+3.  **Output Gate:** *"What is the current status?"*
+      * It looks at the updated memory and decides the current "Hidden State" (the thought vector) to pass to the next frame.
+
+-----
+
+### 3\. The Code Breakdown (`src/train_model.py`)
+
+Here is exactly what your PyTorch code is doing, line-by-line.
+
+#### **Part A: The Architecture (`YogaLSTM` class)**
+
+```python
+self.lstm = nn.LSTM(input_size=132, hidden_size=64, num_layers=2, batch_first=True)
+```
+
+  * `input_size=132`: It expects 132 numbers per frame.
+  * `hidden_size=64`: This is the "brain capacity." It condenses those 132 numbers into 64 abstract features (like "leg\_is\_bent", "arms\_are\_wide") that humans might not understand but the math uses to differentiate poses.
+  * `num_layers=2`: We stack two LSTMs on top of each other. The first finds simple patterns (motion), the second finds complex patterns (pose structure).
+
+<!-- end list -->
+
+```python
+self.fc = nn.Linear(hidden_size, num_classes)
+```
+
+  * **Fully Connected Layer (The Judge):** After the LSTM reads all 30 frames, it outputs one final vector of 64 numbers. This layer looks at that summary and votes for the final pose (e.g., 3 classes: Downdog, Warrior, Tree).
+
+#### **Part B: The "Forward" Pass**
+
+```python
+def forward(self, x):
+    out, _ = self.lstm(x)  # Run the sequence through the gates
+    out = out[:, -1, :]    # Take ONLY the last time step
+    return self.fc(out)    # Make the prediction
+```
+
+  * **Crucial Step:** `out[:, -1, :]`. The LSTM produces an output for *every single frame* (30 outputs). We ignore the first 29 because they are incomplete thoughts. We only care about the state after it has seen the **entire** video clip (the last time step).
+
+#### **Part C: The Training Loop**
+
+```python
+loss = criterion(outputs, batch_y) # 1. Calculate Error
+optimizer.zero_grad()              # 2. Clear previous notes
+loss.backward()                    # 3. Find who is to blame
+optimizer.step()                   # 4. Update the brain
+```
+
+This is **Backpropagation**:
+
+1.  **Guess:** The model guesses "Tree Pose."
+2.  **Check:** The real label is "Warrior II."
+3.  **Blame:** The math calculates which neuron (weight) caused the wrong guess.
+4.  **Update:** It nudges that weight slightly so it's less likely to make that mistake next time.
+5.  **Repeat:** It does this for thousands of video batches until the error is near zero.
+
+-----
+
+### 4\. Summary of Learning
+
+1.  **MediaPipe** simplifies the visual world into a **Geometry problem**.
+2.  **LSTM** treats that geometry as a **Story over Time**.
+3.  **Training** is just the process of tuning the LSTM's "memory gates" so it remembers the important parts of the story (the pose structure) and forgets the noise (camera shake, background).

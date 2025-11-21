@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "yoga-ai"
+version = "0.1.0"
+description = "Custom Yoga Pose Trainer with PyTorch"
+authors = ["Your Name <you@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+# CRITICAL FIX: Restrict Python to versions less than 3.13 to satisfy Triton/PyTorch
+python = ">=3.11,<3.13" 
+opencv-python-headless = "^4.8.0"
+mediapipe = "^0.10.9"
+numpy = "^1.26.0"
+streamlit = "^1.32.0"
+pillow = "^10.2.0"
+streamlit-webrtc = "^0.47.0"
+av = "^11.0.0"
+# We will add torch via command line next, or let it resolve from here if added manually later
+torch = "2.2.0"
+scikit-learn = "^1.7.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
